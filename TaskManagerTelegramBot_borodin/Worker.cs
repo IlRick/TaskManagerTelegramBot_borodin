@@ -1,4 +1,5 @@
 using System.Reflection.Metadata.Ecma335;
+using TaskManagerTelegramBot_borodin.Classes;
 using Telegram.Bot;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
@@ -11,7 +12,7 @@ namespace TaskManagerTelegramBot_borodin
         private readonly ILogger<Worker> _logger;
         readonly string Token = "";
         TelegramBotClient TelegramBotClient;
-        List<User> User = new List<User>();
+        List<Users> User = new List<Users>();
         Timer Timer;
         List<string> message = new List<string>()
         {
@@ -93,5 +94,71 @@ namespace TaskManagerTelegramBot_borodin
         }
 
 
+        public async void Command(long chatId, string command)
+        {
+            if (command.ToLower() == "/start") SendMessage(chatId, 0);
+            else if (command.ToLower() == "/create_task") SendMessage(chatId, 1);
+            else if (command.ToLower() == "/list_task")
+            {
+                Users user= User.Find(x=>x.IdUser == chatId);
+                if (user == null) SendMessage(chatId, 4);
+                else if(user.Events.Count==0) SendMessage(chatId, 4);
+                else
+                {
+                    foreach(Events Event in user.Events)
+                    {
+                        await TelegramBotClient.SendMessage(chatId,
+                            $"Уведомить пользователя: {Event.Time.ToString("HH:mm dd:MM:yyyy")}" +
+                            $"\nСообщение: {Event.Message}",
+                            replyMarkup: DeleteEvent(Event.Message));
+                    }
+                }
+            }
+        }
+
+        private void GetMessages(Message message)
+        {
+            Console.WriteLine("Получено сообщение:"+message.Text+ "от пользователя: "+ message.Chat.Username);
+            long IdUser=message.Chat.Id;
+            string MessageUser= message.Text;
+            if(message.Text.Contains("/"))
+            {
+                Command(message.Chat.Id, message.Text);
+            }
+            else if(message.Text.Equals("Удалить все задачи"))
+            {
+                Users user = User.Find(x => x.IdUser == message.Chat.Id);
+                if (user == null) SendMessage(message.Chat.Id, 4);
+                else if (user.Events.Count == 0) SendMessage(user.IdUser, 4);
+                else
+                {
+                    user.Events= new List<Events>();
+                    SendMessage(user.IdUser, 6);
+                }
+            }
+            else
+            {
+                Users user = User.Find(x => x.IdUser == message.Chat.Id);
+                if(user==null)
+                {
+                    user= new Users(message.Chat.Id);
+                    User.Add(user);
+                }
+                string[] Info= message.Text.Split('\n');
+                if(Info.Length <2)
+                {
+                    SendMessage(message.Chat.Id, 2);
+                    return;
+                }
+                DateTime Time;
+                if (CheckFormatDateTime(Info[0],out Time)==false)
+                {
+                    SendMessage(message.Chat.Id, 2);
+                    return;
+                }
+                user.Events.Add(new Events(Time, message.Text.Replace(Time.ToString("HH:mm dd.MM.yyyy") + "\n", "")));
+            }
+                
+        }
     }
 }
