@@ -1,6 +1,7 @@
 using System.Reflection.Metadata.Ecma335;
 using Telegram.Bot;
 using Telegram.Bot.Types;
+using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 
 namespace TaskManagerTelegramBot_borodin
@@ -75,5 +76,22 @@ namespace TaskManagerTelegramBot_borodin
             inlineKeyboardButtons.Add(new InlineKeyboardButton("Удалить", Message));
             return new InlineKeyboardMarkup(inlineKeyboardButtons);
         }
+        /// <summary>
+        /// Метод отправки сообщения
+        /// </summary>
+        /// <param name="chatId">код пользователя</param>
+        /// <param name="typeMessag">Команда</param>
+        public async void SendMessage(long chatId, int typeMessag)
+        {
+            if(typeMessag!=3)
+            {
+                await TelegramBotClient.SendMessage(chatId, message[typeMessag], ParseMode.Html, replyMarkup: GetButtons());
+            }
+            else if(typeMessag==3)
+                await TelegramBotClient.SendMessage(chatId, $"Указанный вами время и даты не могут быть устанволены, потому-что сечас уже: {DateTime.Now.ToString("HH.mm dd.MM.yyyy")}");
+            
+        }
+
+
     }
 }
