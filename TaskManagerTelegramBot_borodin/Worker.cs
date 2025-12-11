@@ -54,10 +54,6 @@ namespace TaskManagerTelegramBot_borodin
             _timer?.Dispose();
             return Task.CompletedTask;
         }
-
-        // ------------------------------------------------------------
-        //   ОБРАБОТКА UPDATE
-        // ------------------------------------------------------------
         private async Task HandleUpdateAsync(ITelegramBotClient _, Update update, CancellationToken token)
         {
             if (update.CallbackQuery != null)
@@ -107,10 +103,6 @@ namespace TaskManagerTelegramBot_borodin
                     break;
             }
         }
-
-        // ------------------------------------------------------------
-        //   INLINE кнопки — delete
-        // ------------------------------------------------------------
         private async Task HandleCallback(CallbackQuery q)
         {
             if (q.Data.StartsWith("delete_"))
@@ -127,10 +119,6 @@ namespace TaskManagerTelegramBot_borodin
                 );
             }
         }
-
-        // ------------------------------------------------------------
-        //   СОСТОЯНИЯ ДОБАВЛЕНИЯ ЗАДАЧ
-        // ------------------------------------------------------------
         private async Task ProcessStateMessage(long userId, string msg)
         {
             string state = UserStates[userId];
@@ -236,10 +224,6 @@ namespace TaskManagerTelegramBot_borodin
                     break;
             }
         }
-
-        // ------------------------------------------------------------
-        // Кнопка удаления
-        // ------------------------------------------------------------
         private InlineKeyboardMarkup DeleteEventButton(long id)
         {
             return new InlineKeyboardMarkup(
@@ -267,10 +251,6 @@ namespace TaskManagerTelegramBot_borodin
 
             return result.Count == 0 ? null : string.Join(",", result);
         }
-
-        // ------------------------------------------------------------
-        // ПОКАЗАТЬ ЗАДАЧИ
-        // ------------------------------------------------------------
         private async Task ShowTasks(long userId)
         {
             var events = db.GetUserEvents(userId);
