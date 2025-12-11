@@ -31,10 +31,15 @@ namespace TaskManagerTelegramBot_borodin
         {
             Console.WriteLine("Worker запущен.");
 
+            var receiverOptions = new ReceiverOptions()
+            {
+                AllowedUpdates = Array.Empty<UpdateType>()
+            };
+
             bot.StartReceiving(
                 HandleUpdateAsync,
                 HandleErrorAsync,
-                new ReceiverOptions { AllowedUpdates = Array.Empty<UpdateType>() },
+                receiverOptions,
                 cancellationToken
             );
 
@@ -50,24 +55,33 @@ namespace TaskManagerTelegramBot_borodin
             return Task.CompletedTask;
         }
 
-        private async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken token)
+        // ------------------------------------------------------------
+        //   ОБРАБОТКА UPDATE
+        // ------------------------------------------------------------
+        private async Task HandleUpdateAsync(ITelegramBotClient _, Update update, CancellationToken token)
         {
+            if (update.CallbackQuery != null)
+            {
+                await HandleCallback(update.CallbackQuery);
+                return;
+            }
+
             if (update.Message == null || update.Message.Type != MessageType.Text)
                 return;
 
             long userId = update.Message.Chat.Id;
-            string msg = update.Message.Text.Trim();
-            string msgLower = msg.ToLower();
+            string msg = update.Message.Text.Trim().ToLower();
             string username = update.Message.Chat.Username ?? "unknown";
 
             db.AddUser(userId, username);
+
             if (UserStates.ContainsKey(userId))
             {
-                await ProcessStateMessage(userId, msg);
+                await ProcessStateMessage(userId, update.Message.Text);
                 return;
             }
 
-            switch (msgLower)
+            switch (msg)
             {
                 case "/start":
                     await SendMainMenu(userId);
@@ -85,14 +99,38 @@ namespace TaskManagerTelegramBot_borodin
                 case "удалить":
                     db.DeleteAllEvents(userId);
                     await SendMessage(userId, "Все задачи удалены.");
+                    await SendMainMenu(userId);
                     break;
 
                 default:
-                    await SendMessage(userId, "Не понимаю. Используйте кнопки меню.");
+                    await SendMessage(userId, "Не понимаю. Используйте меню.");
                     break;
             }
         }
 
+        // ------------------------------------------------------------
+        //   INLINE кнопки — delete
+        // ------------------------------------------------------------
+        private async Task HandleCallback(CallbackQuery q)
+        {
+            if (q.Data.StartsWith("delete_"))
+            {
+                long id = long.Parse(q.Data.Replace("delete_", ""));
+                db.DeleteEventById(id);
+
+                await bot.AnswerCallbackQuery(q.Id);
+
+                await bot.EditMessageText(
+                    chatId: q.Message.Chat.Id,
+                    messageId: q.Message.MessageId,
+                    text: "❌ Задача удалена"
+                );
+            }
+        }
+
+        // ------------------------------------------------------------
+        //   СОСТОЯНИЯ ДОБАВЛЕНИЯ ЗАДАЧ
+        // ------------------------------------------------------------
         private async Task ProcessStateMessage(long userId, string msg)
         {
             string state = UserStates[userId];
@@ -134,28 +172,33 @@ namespace TaskManagerTelegramBot_borodin
                 case "one_time_text":
                     DateTime date = (DateTime)UserTemp[userId];
                     db.AddEvent(userId, msg, date, "none", null, null);
+
                     await SendMessage(userId, "Одноразовая задача добавлена!");
-                    UserStates.Remove(userId);
                     UserTemp.Remove(userId);
+                    UserStates.Remove(userId);
+
+                    await SendMainMenu(userId);
                     break;
 
                 case "daily_time":
-                    if (TimeSpan.TryParse(msg, out TimeSpan dtime))
+                    if (TimeSpan.TryParse(msg, out TimeSpan t))
                     {
-                        UserTemp[userId] = dtime;
+                        UserTemp[userId] = t;
                         UserStates[userId] = "daily_text";
                         await SendMessage(userId, "Введите текст задачи");
                     }
-                    else
-                        await SendMessage(userId, "Неверный формат времени.");
+                    else await SendMessage(userId, "Неверный формат времени.");
                     break;
 
                 case "daily_text":
-                    TimeSpan t = (TimeSpan)UserTemp[userId];
-                    db.AddEvent(userId, msg, null, "daily", null, t);
+                    TimeSpan dtime = (TimeSpan)UserTemp[userId];
+                    db.AddEvent(userId, msg, null, "daily", null, dtime);
+
                     await SendMessage(userId, "Ежедневная задача добавлена!");
                     UserTemp.Remove(userId);
                     UserStates.Remove(userId);
+
+                    await SendMainMenu(userId);
                     break;
 
                 case "weekly_time":
@@ -165,8 +208,7 @@ namespace TaskManagerTelegramBot_borodin
                         UserStates[userId] = "weekly_days";
                         await SendMessage(userId, "Введите дни недели (например: среда, пятница)");
                     }
-                    else
-                        await SendMessage(userId, "Неверный формат времени.");
+                    else await SendMessage(userId, "Неверный формат времени.");
                     break;
 
                 case "weekly_days":
@@ -176,8 +218,8 @@ namespace TaskManagerTelegramBot_borodin
                         await SendMessage(userId, "Некорректные дни недели.");
                         return;
                     }
-                    TimeSpan stored = (TimeSpan)UserTemp[userId];
-                    UserTemp[userId] = (stored, eng);
+
+                    UserTemp[userId] = ((TimeSpan)UserTemp[userId], eng);
                     UserStates[userId] = "weekly_text";
                     await SendMessage(userId, "Введите текст задачи");
                     break;
@@ -185,18 +227,26 @@ namespace TaskManagerTelegramBot_borodin
                 case "weekly_text":
                     var data = ((TimeSpan, string))UserTemp[userId];
                     db.AddEvent(userId, msg, null, "weekly", data.Item2, data.Item1);
+
                     await SendMessage(userId, "Еженедельная задача добавлена!");
-                    UserStates.Remove(userId);
                     UserTemp.Remove(userId);
+                    UserStates.Remove(userId);
+
+                    await SendMainMenu(userId);
                     break;
             }
         }
-        public static InlineKeyboardMarkup DeleteEvent(string Message)
+
+        // ------------------------------------------------------------
+        // Кнопка удаления
+        // ------------------------------------------------------------
+        private InlineKeyboardMarkup DeleteEventButton(long id)
         {
-            List<InlineKeyboardButton> inlineKeyboardButtons = new List<InlineKeyboardButton>();
-            inlineKeyboardButtons.Add(new InlineKeyboardButton("Удалить"));
-            return new InlineKeyboardMarkup(inlineKeyboardButtons);
+            return new InlineKeyboardMarkup(
+                InlineKeyboardButton.WithCallbackData("❌ Удалить", $"delete_{id}")
+            );
         }
+
         private string? RusToEngDays(string input)
         {
             var map = new Dictionary<string, string>
@@ -211,18 +261,21 @@ namespace TaskManagerTelegramBot_borodin
             };
 
             var result = new List<string>();
+
             foreach (var s in input.Split(',', StringSplitOptions.TrimEntries))
-                if (map.ContainsKey(s))
-                    result.Add(map[s]);
+                if (map.ContainsKey(s)) result.Add(map[s]);
 
             return result.Count == 0 ? null : string.Join(",", result);
         }
 
+        // ------------------------------------------------------------
+        // ПОКАЗАТЬ ЗАДАЧИ
+        // ------------------------------------------------------------
         private async Task ShowTasks(long userId)
         {
             var events = db.GetUserEvents(userId);
 
-            if (events == null || events.Count == 0)
+            if (events.Count == 0)
             {
                 await SendMessage(userId, "У вас нет задач.");
                 return;
@@ -231,27 +284,28 @@ namespace TaskManagerTelegramBot_borodin
             foreach (var e in events)
             {
                 string txt = $"• {e.Message}\n" +
-                             $"   Следующий запуск: {e.NextRun:HH:mm dd.MM.yyyy}\n" +
-                             $"   Тип: {e.RecurrenceType}";
-                await SendMessage(userId, txt);
-                await bot.SendTextMessageAsync(userId, txt, replyMarkup: DeleteEvent(e.Message));
+                             $"Следующий запуск: {e.NextRun:HH:mm dd.MM.yyyy}\n" +
+                             $"Тип: {e.RecurrenceType}";
+
+                await bot.SendMessage(
+                    chatId: userId,
+                    text: txt,
+                    replyMarkup: DeleteEventButton(e.Id)
+                );
             }
         }
-
-
         private async void Tick(object? _)
         {
             var due = db.GetDueEvents();
+
             foreach (var e in due)
             {
                 await SendMessage(e.UserId, $"🔔 Напоминание: {e.Message}");
 
                 if (e.RecurrenceType == "none")
                     db.DeleteEventById(e.Id);
-
                 else if (e.RecurrenceType == "daily")
                     db.UpdateNextRun(e.Id, e.NextRun.AddDays(1));
-
                 else if (e.RecurrenceType == "weekly")
                     db.UpdateNextRun(e.Id, GetNextWeeklyRun(e));
             }
@@ -260,36 +314,39 @@ namespace TaskManagerTelegramBot_borodin
         private DateTime GetNextWeeklyRun(Events e)
         {
             List<DayOfWeek> days = new();
+
             foreach (var x in e.WeeklyDays.Split(','))
-                if (Enum.TryParse(x, true, out DayOfWeek d))
+                if (Enum.TryParse<DayOfWeek>(x, true, out var d))
                     days.Add(d);
 
             for (int i = 1; i <= 14; i++)
             {
                 var check = e.NextRun.AddDays(i).Date + e.TimeOfDay!.Value;
+
                 if (days.Contains(check.DayOfWeek))
                     return check;
             }
 
             return e.NextRun.AddDays(7);
         }
-
-        private Task SendMessage(long chatId, string text, IReplyMarkup? kb = null)
+        private Task SendMessage(long chatId, string text, ReplyMarkup? kb = null)
         {
-            return bot.SendTextMessageAsync(chatId, text, replyMarkup: kb);
+            return bot.SendMessage(
+                chatId: chatId,
+                text: text,
+                replyMarkup: kb
+            );
         }
 
         private ReplyKeyboardMarkup CreateTaskTypeKeyboard()
         {
-            return new(new[]
+            return new ReplyKeyboardMarkup(new[]
             {
                 new KeyboardButton[] { "Одноразовая" },
                 new KeyboardButton[] { "Ежедневно" },
                 new KeyboardButton[] { "Еженедельно" }
             })
-            {
-                ResizeKeyboard = true
-            };
+            { ResizeKeyboard = true };
         }
 
         private Task SendMainMenu(long userId)
@@ -300,19 +357,15 @@ namespace TaskManagerTelegramBot_borodin
                 new KeyboardButton[] { "Посмотреть задачи" },
                 new KeyboardButton[] { "Удалить" }
             })
-            {
-                ResizeKeyboard = true
-            };
+            { ResizeKeyboard = true };
 
             return SendMessage(userId, "Главное меню:", kb);
         }
 
-        private Task HandleErrorAsync(ITelegramBotClient bot, Exception ex, CancellationToken token)
+        private Task HandleErrorAsync(ITelegramBotClient _, Exception ex, CancellationToken token)
         {
             Console.WriteLine($"Ошибка Telegram API: {ex.Message}");
             return Task.CompletedTask;
         }
-
-        
     }
 }
