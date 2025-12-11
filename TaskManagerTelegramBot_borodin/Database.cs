@@ -10,7 +10,7 @@ namespace TaskManagerTelegramBot_borodin
 {
     public class Database
     {
-        string connection = "server=localhost;user=root;password=;database=taskmanagerbot;";
+        string connection = "server=127.0.0.1;Port=3336;user=root;password=;database=taskmanagerbot;";
 
         public void AddUser(long chatId, string username)
         {

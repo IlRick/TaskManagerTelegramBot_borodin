@@ -191,7 +191,12 @@ namespace TaskManagerTelegramBot_borodin
                     break;
             }
         }
-
+        public static InlineKeyboardMarkup DeleteEvent(string Message)
+        {
+            List<InlineKeyboardButton> inlineKeyboardButtons = new List<InlineKeyboardButton>();
+            inlineKeyboardButtons.Add(new InlineKeyboardButton("Удалить"));
+            return new InlineKeyboardMarkup(inlineKeyboardButtons);
+        }
         private string? RusToEngDays(string input)
         {
             var map = new Dictionary<string, string>
@@ -217,21 +222,20 @@ namespace TaskManagerTelegramBot_borodin
         {
             var events = db.GetUserEvents(userId);
 
-            if (events.Count == 0)
+            if (events == null || events.Count == 0)
             {
                 await SendMessage(userId, "У вас нет задач.");
                 return;
             }
 
-            string txt = "Ваши задачи:\n\n";
             foreach (var e in events)
             {
-                txt += $"• {e.Message}\n" +
-                       $"   Следующий запуск: {e.NextRun:HH:mm dd.MM.yyyy}\n" +
-                       $"   Тип: {e.RecurrenceType}\n\n";
+                string txt = $"• {e.Message}\n" +
+                             $"   Следующий запуск: {e.NextRun:HH:mm dd.MM.yyyy}\n" +
+                             $"   Тип: {e.RecurrenceType}";
+                await SendMessage(userId, txt);
+                await bot.SendTextMessageAsync(userId, txt, replyMarkup: DeleteEvent(e.Message));
             }
-
-            await SendMessage(userId, txt);
         }
 
 
@@ -308,5 +312,7 @@ namespace TaskManagerTelegramBot_borodin
             Console.WriteLine($"Ошибка Telegram API: {ex.Message}");
             return Task.CompletedTask;
         }
+
+        
     }
 }
