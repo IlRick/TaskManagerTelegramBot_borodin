@@ -1,208 +1,312 @@
-using System.Reflection.Metadata.Ecma335;
-using TaskManagerTelegramBot_borodin.Classes;
+п»їusing Microsoft.Extensions.Hosting;
+using System;
+using System.Threading;
+using System.Threading.Tasks;
 using Telegram.Bot;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
+using TaskManagerTelegramBot_borodin.Classes;
+using System.Collections.Generic;
 
-public class Worker : BackgroundService
+namespace TaskManagerTelegramBot_borodin
 {
-    private readonly ILogger<Worker> _logger;
-    readonly string Token = "8575293952:AAFmGdit8itXHevXyG1xTq0-WbXYiUXdExA";
-    TelegramBotClient TelegramBotClient;
-    List<Users> Users = new List<Users>();
-    Timer Timer;
-    List<string> Messages = new List<string>()
+    public class Worker : IHostedService
     {
-            "Здравствуйте!"
-            +$"\nРады приветствовать вас в Telegram-боте @Напоминатор@!"
-            +"\nНаш бот создан для того, чтобы напоминать вам о важных событиях и мероприятиях. С ним вы точно не пропустите ничего важного!"
-            +"\nНе забудьте добавить бота в список своих контактов и настроить уведомления. Тогда вы всегда будете в курсе событий!",
+        private readonly TelegramBotClient bot;
+        private readonly Database db = new();
 
-            "Укажите дату и время напоминания в следующем формате: "
-            +"\n<i><b>21:51 26.04.2025</b>"
-            +"\n Напомни о том что я хотел сходить в магазин.</i>",
+        private readonly Dictionary<long, string> UserStates = new();
+        private readonly Dictionary<long, object> UserTemp = new();
 
-            "Кажется что-то не получилось."
-            +"\n<i><b>21:51 26.04.2025</b>"
-            +"\n Напомни о том что я хотел сходить в магазин.</i>",
+        private Timer? _timer;
 
-            "",
-            "Задачи пользователя не найдены.",
-            "Событие удалено.",
-            "Все события удалены."
-    };
+        public Worker()
+        {
+            bot = new TelegramBotClient("8575293952:AAFmGdit8itXHevXyG1xTq0-WbXYiUXdExA");
+        }
 
-    public Worker(ILogger<Worker> logger)
-    {
-        _logger = logger;
-    }
+        public Task StartAsync(CancellationToken cancellationToken)
+        {
+            Console.WriteLine("Worker Р·Р°РїСѓС‰РµРЅ.");
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-    {
-        TelegramBotClient = new TelegramBotClient(Token);
-        TelegramBotClient.StartReceiving
-            (
-            HandleUpdateAsync,
-            HandleErrorAsync,
-            null,
-            new CancellationTokenSource().Token
+            bot.StartReceiving(
+                HandleUpdateAsync,
+                HandleErrorAsync,
+                new ReceiverOptions { AllowedUpdates = Array.Empty<UpdateType>() },
+                cancellationToken
             );
-        TimerCallback timerCallback = new TimerCallback(Tick);
-        Timer = new Timer(timerCallback, 0, 0, 60 * 1000);
-    }
 
-    public bool CheckFormatDateTime(string value, out DateTime time)
-    {
-        return DateTime.TryParse(value, out time);
-    }
-    private static ReplyKeyboardMarkup GetButtons()
-    {
-        List<KeyboardButton> keyboardButtons = new List<KeyboardButton>();
-        keyboardButtons.Add(new KeyboardButton("Удалить все задачи"));
-        return new ReplyKeyboardMarkup
-        {
-            Keyboard = new List<List<KeyboardButton>>
-                {
-                    keyboardButtons
-                }
-        };
-    }
-    public static InlineKeyboardMarkup DeleteEvent(string Message)
-    {
-        List<InlineKeyboardButton> inlineKeyboards = new List<InlineKeyboardButton>();
-        inlineKeyboards.Add(new InlineKeyboardButton("Удалить", Message));
-        return new InlineKeyboardMarkup(inlineKeyboards);
-    }
-    public async void SendMessage(long chatId, int typeMessage)
-    {
-        if (typeMessage != 3)
-        {
-            await TelegramBotClient.SendMessage
-                (
-                    chatId,
-                    Messages[typeMessage],
-                    ParseMode.Html,
-                    replyMarkup: GetButtons()
-                );
+            _timer = new Timer(Tick, null, TimeSpan.Zero, TimeSpan.FromSeconds(30));
+
+            return Task.CompletedTask;
         }
-        else if (typeMessage == 3)
-            await TelegramBotClient.SendMessage(
-                chatId,
-                "Указанное время и дата не могут быть установлены, "
-                + $"потому что сейчас:{DateTime.Now.ToString("HH.mm dd.MM.yyyy")}");
-    }
-    public async void Command(long chatId, string command)
-    {
-        if (command.ToLower() == "/start") SendMessage(chatId, 0);
-        else if (command.ToLower() == "/create_tasks") SendMessage(chatId, 1);
-        else if (command.ToLower() == "/list_tasks")
+
+        public Task StopAsync(CancellationToken cancellationToken)
         {
-            Users User = Users.Find(x => x.IdUser == chatId);
-            if (User == null) SendMessage(chatId, 4);
-            else if (User.Events.Count == 0) SendMessage(chatId, 4);
-            else
-            {
-                foreach (Events Event in User.Events)
-                {
-                    await TelegramBotClient.SendMessage
-                        (
-                        chatId,
-                        $"Уведомить пользователя: {Event.Time.ToString("HH:mm dd:MM:yyyy")}"
-                        + $"\nСообщение: {Event.Message}",
-                        replyMarkup: DeleteEvent(Event.Message)
-                        );
-                }
-            }
+            Console.WriteLine("Worker РѕСЃС‚Р°РЅРѕРІР»РµРЅ.");
+            _timer?.Dispose();
+            return Task.CompletedTask;
         }
-    }
-    private void GetMessages(Message message)
-    {
-        Console.WriteLine("Получено сообщение: " + message.Text + " от пользователя : " + message.Chat.Username);
-        long IdUser = message.Chat.Id;
-        string MessageUser = message.Text;
-        if (message.Text.Contains("/")) Command(message.Chat.Id, message.Text);
-        else if (message.Text.Equals("Удалить все задачи"))
+
+        private async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken token)
         {
-            Users User = Users.Find(x => x.IdUser == message.Chat.Id);
-            if (User == null) SendMessage(message.Chat.Id, 4);
-            else if (User.Events.Count == 0) SendMessage(User.IdUser, 4);
-            else
+            if (update.Message == null || update.Message.Type != MessageType.Text)
+                return;
+
+            long userId = update.Message.Chat.Id;
+            string msg = update.Message.Text.Trim();
+            string msgLower = msg.ToLower();
+            string username = update.Message.Chat.Username ?? "unknown";
+
+            db.AddUser(userId, username);
+            if (UserStates.ContainsKey(userId))
             {
-                User.Events = new List<Events>();
-                SendMessage(User.IdUser, 6);
-            }
-        }
-        else
-        {
-            Users User = Users.Find(x => x.IdUser == message.Chat.Id);
-            if (User == null)
-            {
-                User = new Users(message.Chat.Id);
-                Users.Add(User);
-            }
-            string[] Info = message.Text.Split('\n');
-            if (Info.Length < 2)
-            {
-                SendMessage(message.Chat.Id, 2);
+                await ProcessStateMessage(userId, msg);
                 return;
             }
-            DateTime Time;
-            if (CheckFormatDateTime(Info[0], out Time) == false)
+
+            switch (msgLower)
             {
-                SendMessage(message.Chat.Id, 2);
+                case "/start":
+                    await SendMainMenu(userId);
+                    break;
+
+                case "РґРѕР±Р°РІРёС‚СЊ Р·Р°РґР°С‡Сѓ":
+                    UserStates[userId] = "choose_type";
+                    await SendMessage(userId, "Р’С‹Р±РµСЂРёС‚Рµ С‚РёРї Р·Р°РґР°С‡Рё:", CreateTaskTypeKeyboard());
+                    break;
+
+                case "РїРѕСЃРјРѕС‚СЂРµС‚СЊ Р·Р°РґР°С‡Рё":
+                    await ShowTasks(userId);
+                    break;
+
+                case "СѓРґР°Р»РёС‚СЊ":
+                    db.DeleteAllEvents(userId);
+                    await SendMessage(userId, "Р’СЃРµ Р·Р°РґР°С‡Рё СѓРґР°Р»РµРЅС‹.");
+                    break;
+
+                default:
+                    await SendMessage(userId, "РќРµ РїРѕРЅРёРјР°СЋ. РСЃРїРѕР»СЊР·СѓР№С‚Рµ РєРЅРѕРїРєРё РјРµРЅСЋ.");
+                    break;
+            }
+        }
+
+        private async Task ProcessStateMessage(long userId, string msg)
+        {
+            string state = UserStates[userId];
+            string low = msg.ToLower();
+
+            switch (state)
+            {
+                case "choose_type":
+                    if (low == "РѕРґРЅРѕСЂР°Р·РѕРІР°СЏ")
+                    {
+                        UserStates[userId] = "one_time_date";
+                        await SendMessage(userId, "Р’РІРµРґРёС‚Рµ РґР°С‚Сѓ Рё РІСЂРµРјСЏ: 21:00 15.04.2025");
+                    }
+                    else if (low == "РµР¶РµРґРЅРµРІРЅРѕ")
+                    {
+                        UserStates[userId] = "daily_time";
+                        await SendMessage(userId, "Р’РІРµРґРёС‚Рµ РІСЂРµРјСЏ (HH:mm)");
+                    }
+                    else if (low == "РµР¶РµРЅРµРґРµР»СЊРЅРѕ")
+                    {
+                        UserStates[userId] = "weekly_time";
+                        await SendMessage(userId, "Р’РІРµРґРёС‚Рµ РІСЂРµРјСЏ (HH:mm)");
+                    }
+                    break;
+
+                case "one_time_date":
+                    if (DateTime.TryParse(msg, out DateTime dt))
+                    {
+                        UserTemp[userId] = dt;
+                        UserStates[userId] = "one_time_text";
+                        await SendMessage(userId, "Р’РІРµРґРёС‚Рµ С‚РµРєСЃС‚ Р·Р°РґР°С‡Рё");
+                    }
+                    else
+                    {
+                        await SendMessage(userId, "РќРµРІРµСЂРЅС‹Р№ С„РѕСЂРјР°С‚. РџСЂРёРјРµСЂ: 21:00 15.04.2025");
+                    }
+                    break;
+
+                case "one_time_text":
+                    DateTime date = (DateTime)UserTemp[userId];
+                    db.AddEvent(userId, msg, date, "none", null, null);
+                    await SendMessage(userId, "РћРґРЅРѕСЂР°Р·РѕРІР°СЏ Р·Р°РґР°С‡Р° РґРѕР±Р°РІР»РµРЅР°!");
+                    UserStates.Remove(userId);
+                    UserTemp.Remove(userId);
+                    break;
+
+                case "daily_time":
+                    if (TimeSpan.TryParse(msg, out TimeSpan dtime))
+                    {
+                        UserTemp[userId] = dtime;
+                        UserStates[userId] = "daily_text";
+                        await SendMessage(userId, "Р’РІРµРґРёС‚Рµ С‚РµРєСЃС‚ Р·Р°РґР°С‡Рё");
+                    }
+                    else
+                        await SendMessage(userId, "РќРµРІРµСЂРЅС‹Р№ С„РѕСЂРјР°С‚ РІСЂРµРјРµРЅРё.");
+                    break;
+
+                case "daily_text":
+                    TimeSpan t = (TimeSpan)UserTemp[userId];
+                    db.AddEvent(userId, msg, null, "daily", null, t);
+                    await SendMessage(userId, "Р•Р¶РµРґРЅРµРІРЅР°СЏ Р·Р°РґР°С‡Р° РґРѕР±Р°РІР»РµРЅР°!");
+                    UserTemp.Remove(userId);
+                    UserStates.Remove(userId);
+                    break;
+
+                case "weekly_time":
+                    if (TimeSpan.TryParse(msg, out TimeSpan wtime))
+                    {
+                        UserTemp[userId] = wtime;
+                        UserStates[userId] = "weekly_days";
+                        await SendMessage(userId, "Р’РІРµРґРёС‚Рµ РґРЅРё РЅРµРґРµР»Рё (РЅР°РїСЂРёРјРµСЂ: СЃСЂРµРґР°, РїСЏС‚РЅРёС†Р°)");
+                    }
+                    else
+                        await SendMessage(userId, "РќРµРІРµСЂРЅС‹Р№ С„РѕСЂРјР°С‚ РІСЂРµРјРµРЅРё.");
+                    break;
+
+                case "weekly_days":
+                    var eng = RusToEngDays(low);
+                    if (eng == null)
+                    {
+                        await SendMessage(userId, "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Рµ РґРЅРё РЅРµРґРµР»Рё.");
+                        return;
+                    }
+                    TimeSpan stored = (TimeSpan)UserTemp[userId];
+                    UserTemp[userId] = (stored, eng);
+                    UserStates[userId] = "weekly_text";
+                    await SendMessage(userId, "Р’РІРµРґРёС‚Рµ С‚РµРєСЃС‚ Р·Р°РґР°С‡Рё");
+                    break;
+
+                case "weekly_text":
+                    var data = ((TimeSpan, string))UserTemp[userId];
+                    db.AddEvent(userId, msg, null, "weekly", data.Item2, data.Item1);
+                    await SendMessage(userId, "Р•Р¶РµРЅРµРґРµР»СЊРЅР°СЏ Р·Р°РґР°С‡Р° РґРѕР±Р°РІР»РµРЅР°!");
+                    UserStates.Remove(userId);
+                    UserTemp.Remove(userId);
+                    break;
+            }
+        }
+
+        private string? RusToEngDays(string input)
+        {
+            var map = new Dictionary<string, string>
+            {
+                {"РїРѕРЅРµРґРµР»СЊРЅРёРє","Monday"},
+                {"РІС‚РѕСЂРЅРёРє","Tuesday"},
+                {"СЃСЂРµРґР°","Wednesday"},
+                {"С‡РµС‚РІРµСЂРі","Thursday"},
+                {"РїСЏС‚РЅРёС†Р°","Friday"},
+                {"СЃСѓР±Р±РѕС‚Р°","Saturday"},
+                {"РІРѕСЃРєСЂРµСЃРµРЅСЊРµ","Sunday"}
+            };
+
+            var result = new List<string>();
+            foreach (var s in input.Split(',', StringSplitOptions.TrimEntries))
+                if (map.ContainsKey(s))
+                    result.Add(map[s]);
+
+            return result.Count == 0 ? null : string.Join(",", result);
+        }
+
+        private async Task ShowTasks(long userId)
+        {
+            var events = db.GetUserEvents(userId);
+
+            if (events.Count == 0)
+            {
+                await SendMessage(userId, "РЈ РІР°СЃ РЅРµС‚ Р·Р°РґР°С‡.");
                 return;
             }
-            if (Time < DateTime.Now) SendMessage(message.Chat.Id, 3);
-            User.Events.Add(new Events
-                (
-                Time,
-                message.Text.Replace(Time.ToString("HH:mm dd.MM.yyyy") + "\n", "")
-                ));
-        }
-    }
-    private async Task HandleUpdateAsync
-        (
-            ITelegramBotClient client,
-            Update update,
-            CancellationToken cancellationToken
-        )
-    {
-        if (update.Type == UpdateType.Message)
-            GetMessages(update.Message);
-        else if (update.Type == UpdateType.CallbackQuery)
-        {
-            CallbackQuery query = update.CallbackQuery;
-            Users User = Users.Find(x => x.IdUser == query.Message.Chat.Id);
-            Events Event = User.Events.Find(x => x.Message == query.Data);
-            User.Events.Remove(Event);
-            SendMessage(query.Message.Chat.Id, 5);
-        }
-    }
-    private async Task HandleErrorAsync(
-        ITelegramBotClient client,
-        Exception exception,
-        HandleErrorSource source,
-        CancellationToken token)
-    {
-        Console.WriteLine("Ошибка" + exception.Message);
-    }
 
-    public async void Tick(object obj)
-    {
-        string TimeNow = DateTime.Now.ToString("HH:mm dd.MM.yyyy");
-        foreach (Users User in Users)
-        {
-            for (int i = 0; i < User.Events.Count; i++)
+            string txt = "Р’Р°С€Рё Р·Р°РґР°С‡Рё:\n\n";
+            foreach (var e in events)
             {
-                if (User.Events[i].Time.ToString("HH:mm dd.MM.yyyy") != TimeNow) continue;
-                await TelegramBotClient.SendMessage(
-                    User.IdUser,
-                    "Напоминание: " + User.Events[i].Message);
-                User.Events.Remove(User.Events[i]);
+                txt += $"вЂў {e.Message}\n" +
+                       $"   РЎР»РµРґСѓСЋС‰РёР№ Р·Р°РїСѓСЃРє: {e.NextRun:HH:mm dd.MM.yyyy}\n" +
+                       $"   РўРёРї: {e.RecurrenceType}\n\n";
+            }
+
+            await SendMessage(userId, txt);
+        }
+
+
+        private async void Tick(object? _)
+        {
+            var due = db.GetDueEvents();
+            foreach (var e in due)
+            {
+                await SendMessage(e.UserId, $"рџ”” РќР°РїРѕРјРёРЅР°РЅРёРµ: {e.Message}");
+
+                if (e.RecurrenceType == "none")
+                    db.DeleteEventById(e.Id);
+
+                else if (e.RecurrenceType == "daily")
+                    db.UpdateNextRun(e.Id, e.NextRun.AddDays(1));
+
+                else if (e.RecurrenceType == "weekly")
+                    db.UpdateNextRun(e.Id, GetNextWeeklyRun(e));
             }
         }
-    }
 
+        private DateTime GetNextWeeklyRun(Events e)
+        {
+            List<DayOfWeek> days = new();
+            foreach (var x in e.WeeklyDays.Split(','))
+                if (Enum.TryParse(x, true, out DayOfWeek d))
+                    days.Add(d);
+
+            for (int i = 1; i <= 14; i++)
+            {
+                var check = e.NextRun.AddDays(i).Date + e.TimeOfDay!.Value;
+                if (days.Contains(check.DayOfWeek))
+                    return check;
+            }
+
+            return e.NextRun.AddDays(7);
+        }
+
+        private Task SendMessage(long chatId, string text, IReplyMarkup? kb = null)
+        {
+            return bot.SendTextMessageAsync(chatId, text, replyMarkup: kb);
+        }
+
+        private ReplyKeyboardMarkup CreateTaskTypeKeyboard()
+        {
+            return new(new[]
+            {
+                new KeyboardButton[] { "РћРґРЅРѕСЂР°Р·РѕРІР°СЏ" },
+                new KeyboardButton[] { "Р•Р¶РµРґРЅРµРІРЅРѕ" },
+                new KeyboardButton[] { "Р•Р¶РµРЅРµРґРµР»СЊРЅРѕ" }
+            })
+            {
+                ResizeKeyboard = true
+            };
+        }
+
+        private Task SendMainMenu(long userId)
+        {
+            var kb = new ReplyKeyboardMarkup(new[]
+            {
+                new KeyboardButton[] { "Р”РѕР±Р°РІРёС‚СЊ Р·Р°РґР°С‡Сѓ" },
+                new KeyboardButton[] { "РџРѕСЃРјРѕС‚СЂРµС‚СЊ Р·Р°РґР°С‡Рё" },
+                new KeyboardButton[] { "РЈРґР°Р»РёС‚СЊ" }
+            })
+            {
+                ResizeKeyboard = true
+            };
+
+            return SendMessage(userId, "Р“Р»Р°РІРЅРѕРµ РјРµРЅСЋ:", kb);
+        }
+
+        private Task HandleErrorAsync(ITelegramBotClient bot, Exception ex, CancellationToken token)
+        {
+            Console.WriteLine($"РћС€РёР±РєР° Telegram API: {ex.Message}");
+            return Task.CompletedTask;
+        }
+    }
 }
